@@ -147,21 +147,102 @@ need to write lmao
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 \section{Introduction}
 
-todo
+The number of molecules that obey Lipinski's rule-of-five for oral bioavailablity, otherwise referred to as "drug-like" chemical space has been estimated to be $10^{60}$. \cite{lipinski1997experimental,bohacekChemSpace} Even with the availabilty of high-throughput screening to examine 100,000 compounds per day \cite{htsnumbers}, the number of possible molecules remains far to large to be efficiently labeled. While machine learning methods have been widely adapted at predicting various small molecule properties, this constraint on their available training data limits their effectiveness. As such, it is an open question on how to effectively select which unknown molecules to label in order to boost model performance.
+
+Active learning is the field of machine learning research wherein the learning algorithm can query the labels for a new set of data points in order to perform exactly this task. Active learning can be broken into 3 main categories: 1) uncertainty based methods, 2) committee-based methods, and 3) global methods.\cite{alreview1,alreview2}. Uncertainty based methods utilize a model which can predict its own uncertainty about how to label the data. This allows the selection of new data to label by selecting what the most is least confident. Committee-based methods instead use an ensemble of models to predict the labels of the data and the data where the ensemble disagrees the most is the most informative to label. Lastly, global methods, such as expected model change and expected error reduction, utilize models that have been trained with gradient descent to inform which data should be labeled. Active learning has been successful in language modeling\cite{allanguage}, image classification\cite{allanguage}, molecule classification\cite{alcompoundclass}, and lead optimization\cite{alleadop}. 
+
+However, most of the research with these various active learning approaches focuses on classification tasks. There has been comparatively little research on active learning approaches in regression tasks\cite{alreggreedysample,alnigregress}, possibly due to the difficulty in obtaining an accurate prediction of a model's uncertainty during regression. \citet{alnigregress} recently published a framework for active learning for regression tasks by having their model regress to a normal inverse gamma (NIG) distribution instead of a single number. Notably by regressing to 4 numbers via the NIG distribution instead of two, like regressing to a Gaussian distribution, it is possible to disentangle the aleatoric (data) and epistemic (model) uncertainties. \cite{alnigregress} Notably, this allows the model to suggest batches to be labeled based on only its own uncertainty, which is a state of the art method available in classification tasks.\cite{directepistemicunc}. 
+
+\citet{alnigregress} achieved state of the art performance and showcased the ability of their method to succeed in active learning tasks on the QM9 dataset for molecular property prediction. Thus, we sought to adapt their approach and benchmark it against other active learning techniques for predicting small molecule pKa. We analyzed active learning selection by the variance of the predictions of an ensemble of models, the predicted variance of a single model by regressing to a Gaussian, and the epistemic uncertainty of a single model by regressing to a NIG distribution of feed forward neural networks trained on clustered cross validation (CCV) splits of the OPERA pKa dataset \cite{operapKa}. We show that while a greedy selection ordering shows that there is an optimal selection of molecules to achieve maximal performance on a small subset of held out compounds, none of the active learning approaches achieved better performance than selecting from the withheld molecules at random. Source code for our models, training procedure, and scripts for generating the data in this paper is available at \url{https://github.com/francoep/pKa_activelearning}.
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %% Methods
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 \section{Methods}
+Here we describe our dataset preparation, active learning selection criteria, and model architectures.
 
-todo 2
+\subsection{Dataset}
+We utilized the OPERA pKa dataset\cite{operapKa} as it was the largest easily available and labeled dataset for small molecule pKa. Before model training we first standardized the SMILES\cite{smiles} strings using RDkit\cite{rdkit} and removed any duplicates. Then we normalized the pKa's to 0 mean and unit variance. In order to create CCV folds, we utilized the MACCS keys \cite{maccskeys} representation and created clusters using a Tanimoto similarity threshold of 0.8. These clusters were then randomly split into the various datasets described in Table~\ref{tab:datasets}. For each split, there are 5 different generations each made with a different random seed. 
+
+\begin{table}[]
+    \centering
+    \begin{tabular}{c|c|c|c|c}
+    \hline
+        Name & Training Size & Withheld Size & Testing Size & External Size \\
+    \hline
+        CCV & 50 & 4367 & 1104 & -- \\
+        Largest Cluster & 50 & 492 & 50 & 4929 \\
+        Clusters 02 & 50 & 690 & 50 & 4731 \\
+    \hline
+    \end{tabular}
+    \caption{Various data splits used in our experiments}
+    \label{tab:datasets}
+\end{table}
+
+
+\subsection{Active learning selection methods}
+The active learning loop is as follows: 1) Train a model using the available training data and log its performance on the test set, 2) Using the trained model, predict the labels of every molecule in the withheld set, 3) Select the molecule to be added to the training set via a selection criteria, 4) Repeat steps 1-3 until there are no molecules remaining in the withheld set. We investigated 3 strategies for selecting the molecule to add to the training set. In order of increasing complexity we have: 1) Highest variance between the predicted labels of a 5 model ensemble, 2) Highest predicted variance of a single model regressing to a Gaussian distribution, and 3) highest predicted evidence of a single model regressing to a NIG distribution as described by \citet{alnigregress}. We selected these three methods as they represent the naive approach, then a more sophisticated approach, and lastly a state of the art approach to active learning for regression tasks.
+
+For models using the variance of predictions of a 5 model ensemble, each model was trained on the mean-squared error (MSE) of the predicted labels and the true labels of the test set, and only differed between other members of the ensemble by having a different random seed for weight initialization. For the models utilizing the regression to a Gaussian the loss function was log-likelihood of the true label being in the predicted Gaussian distribution. Lastly, for the models regressing to a NIG distribution, we utilized the exact loss defined by \citet{alnigregress}, which is a linear combination of the negative log-likelihood of the true label being in the predicted distribution and the absolute error of the predicted and true labels.
+
+\subsection{Model architecture}
+In order to determine the model architecture we performed a two-stage hyperparameter sweep with weights and biases\cite{wandb} as described in Table~\ref{tab:wandsweep}. Briefly, we selected for the best overall model for each of the two active learning selection methods described above, which turned out to be the same architecture for each loss. Each run of the sweep was performed on the train+validation of a single seed of the CCV data split. Our final architecture is shown in Figure(TODO make). The vast majority of our models were trained on the Morgan fingerprints of the molecule's SMILES with bitsize set to 2048, however we also investigated utilizing a richer input representation to the model. This was done by utilizing the pre-trained molecule attention transformer (MAT) \cite{MAT}, which is a graph transformer that was pre-trained on ChemBL\cite{Chembl} to predict the properties of masked nodes of the input graph. The output of the MAT model is a 1024 dimensional vector, and we fixed the weights to produce this output during our model training.
+
+\begin{figure}[tb]
+    \subfloat[Initial Random Sweep]{
+        \centering
+        \begin{tabular}{|c|c|}
+        \hline
+            Parameter & Range \\
+        \hline
+            Fingerprint & RDkit, Morgan, Atompair, Torsions  \\
+            Bit Size & 512, 1024, 2048  \\
+            Hidden Dimension size & 64,128,256,512  \\
+            Loss Functions & MSE, Gaussian log-likelihood, Evidence  \\
+            Learning Rate & 0.001, 0.0001, 0.00001  \\
+            Number of Hidden Layers & 0,1,2,3  \\
+        \hline
+        \end{tabular}
+        \label{tab:initsweep}
+    }
+    
+    \subfloat[Architecture Refinement]{
+        \centering
+        \begin{tabular}{|c|c|}
+        \hline
+            Parameter & Range \\
+        \hline
+             Fingerprint & RDkit, \textbf{Morgan}\\
+             Bit Size & 512, 1024, \textbf{2048}\\
+             Epochs & 100, 200, 300, 400 \\
+             Hidden Dimension size & 256, 512, \textbf{1024} \\
+             Learning Rate & \textbf{0.0001}, 0.00001  \\
+             Number of Hidden Layers & 1, \textbf{2}, 3, 4 \\
+         \hline
+        \end{tabular}
+        \label{tab:archsweep}
+    }
+    \caption{Two stage hyperparameter sweep to define the final architecture. The initial random sweep was performed via using Weights and Bias's random sweeping tool with the target to minimize the test set RMSE. The architecture refinement sweep was a grid search over the listed parameters after the optimizer hyperparameters were set from the first stage. The second sweep outline was performed for each loss function. Our models utilized the hyperparameters in bold. Each run of the sweep used a single seed of the training+withheld set of the CCV data split.}
+    \label{tab:wandsweep}
+\end{figure}
+
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %% Results
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 \section{Results}
 
-todo 3
+\begin{itemize}
+    \item Ensemble variance, Gaussian Regression, NIG regression over all CCV data
+    \item as above, but restricted to 1 cluster
+    \item Baseline experiment to determine if signal is present -- Greedy line
+    \item Using 2 clusters
+    \item Varying training times and input representations -- Transformer
+    \item checking 5 seeds of Transformer input
+    \item Using a much larger model
+    \item changing AL selection criteria 
+    \item Batching molecules for selection
+\end{itemize}
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %% Discussion
@@ -178,9 +259,9 @@ womp womp
 \begin{acknowledgement}
 
 
-The authors thank Matthew Ragoza, Jonathan King, and Andrew McNutt for their insightful contributions during the preparation of this manuscript.
+The authors thank <insert names here> for their insightful contributions during the preparation of this manuscript.
 
-This work is supported by R01GM108340 from the National Institute of General Medical Sciences, by the University of Pittsburgh Center for Research Computing through the resources provided, by the Extreme Science and Engineering Discovery Environment (XSEDE) Bridges GPU resource at the Pittsburgh Supercomputing Center (allocation TG-MCB190049), which is supported by National Science Foundation grant number ACI-1548562, support from Google Cloud, and by a GPU donation from the NVIDIA corporation.
+This work is supported by R35GM140753 from the National Institute of General Medical Sciences. The content is solely the responsibility of the authors and does not necessarily represent the official views of the National Institutes of Health.
 
 \end{acknowledgement}
 
