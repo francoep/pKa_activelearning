@@ -502,7 +502,7 @@ for i in range(total_runs):
 
             if args.test2:
                 t2_labels, t2_pred, _ = get_predictions(trained_model, test2_loader,dist_flag=multi_regress, evd_flag=evidence_model)
-                pred_results[test2][i]['true']=t2_labels
+                pred_results['test2'][i]['true']=t2_labels
                 if args.loss=='mse':
                     pred_results['test2'][i]['predictions'].append(t2_pred)
                 else:
