@@ -370,6 +370,7 @@ parser.add_argument('--test2',default=None,type=str,help='Csv containing the dat
 parser.add_argument('--outname',type=str,required=True,help='Name for the output pickle file. Dictionary of n_added:(rmse,r).')
 parser.add_argument('--max_add',type=int,default=None,help='Maximum Number of molecule batches to add. Defaults to adding every molecule in extrafile.')
 parser.add_argument('--savemodel', type=str, default=None,help='Filename to save the final trained model.')
+parser.add_argument('--savepreds', type=str, default=None,help='Filename to save the predictions. Dictionary of n_added:{pred:[predictions], true:[labels]}). Defaults to not saving.')
 
 #arguments for the training of a model
 parser.add_argument('--fingerprint',choices=['rdkit','morgan','atompair','torsions','maccs'],help='Type of fingerprint to use.')
@@ -445,9 +446,11 @@ else:
     total_runs=len(extra_data)+1
 
 results={'smiles_added':[]}#dictionary of {Num_added_examples:[(RMSE,R) per model],smiles_added:[ordered list of added smiles]}
+pred_results={}#dictionary of {num_added_examples:[pred,true]} <-- only full if the argument file is set.
 
 if args.test2:
     results['test2']={} #adding a sub-dictionary for the extra test set. The sub-dictionary is also {Num_added_examples:[(RMSE,R) per model]}.
+    pred_results['test2']={}
 
 #main loop
 if args.al_bylabel:
@@ -462,8 +465,12 @@ for i in range(total_runs):
         n_select=args.n_add
 
     results[i]=[]
+    if args.savepreds:
+        pred_results[i]={'true':[],'predictions':[]}
     if args.test2:
         results['test2'][i]=[]
+        if args.savepreds:
+            pred_results['test2'][i]={'true':[],'predictions':[]}
     predictions=[]
     sigmas=None
 
@@ -479,11 +486,27 @@ for i in range(total_runs):
         #logging the trained performance on the test set
         rmse,r,_ = get_stats(trained_model, test_loader,dist_flag=multi_regress, evd_flag=evidence_model)
         results[i].append((rmse,r))
-
         #if there is a test2 file, we also need to log those results
         if args.test2:
             rmse2,r2,_ = get_stats(trained_model,test2_loader,dist_flag=multi_regress, evd_flag=evidence_model)
             results['test2'][i].append((rmse2,r2))
+
+        #if we want to save the prediction arrays as well
+        if args.savepreds:
+            t1_labels, t1_pred, _ = get_predictions(trained_model, test_loader, dist_flag=multi_regress, evd_flag=evidence_model)
+            pred_results[i]['true']=t1_labels
+            if args.loss=='mse':
+                pred_results[i]['predictions'].append(t1_pred)
+            else:
+                pred_results[i]['predictions']=t1_pred
+
+            if args.test2:
+                t2_labels, t2_pred, _ = get_predictions(trained_model, test2_loader,dist_flag=multi_regress, evd_flag=evidence_model)
+                pred_results[test2][i]['true']=t2_labels
+                if args.loss=='mse':
+                    pred_results['test2'][i]['predictions'].append(t2_pred)
+                else:
+                    pred_results['test2'][i]['predictions']=t2_pred
 
         #gathering the predictions on the extra data
         if args.loss=='mse':
@@ -508,9 +531,23 @@ for i in range(total_runs):
         extra_pred=np.mean(predictions,axis=1)
         sigmas=np.var(predictions,axis=1)
         print('multiple seeded sigmas')
+
+        if args.savepreds:
+            tmp=pred_results[i]['predictions']
+            tmp=np.mean(np.stack(tmp).T,axis=1)
+            pred_results[i]['predictions']=tmp
+            if args.test2:
+                tmp=pred_results['test2'][i]['predictions']
+                tmp=np.mean(np.stack(tmp).T,axis=1)
+                pred_results['test2'][i]['predictions']=tmp
     elif args.loss=='mse':
         print('sigmas just prediction')
         sigmas=extra_pred
+
+        if args.savepreds:
+            pred_results[i]['predictions']=pred_results[i]['predictions'][0]
+            if args.test2:
+                pred_results['test2'][i]['predictions']=pred_results['test2'][i]['predictions'][0]
 
     print(sigmas.shape)
     
@@ -548,6 +585,11 @@ for i in range(total_runs):
             train_data.append(extra_data.pop(ind-i))
             train_labels.append(extra_labels.pop(ind-i))
     print(len(train_data),len(extra_data))
+
 #after simulation is complete, dump the stored results
 with open(args.outname,'wb') as outfile:
     pickle.dump(results,outfile)
+
+if args.savepreds:
+    with open(args.savepreds,'wb') as outfile:
+        pickle.dump(pred_results,outfile)
