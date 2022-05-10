@@ -13,6 +13,7 @@ parser.add_argument('--end',type=int,required=True,help='Ending number of iterat
 parser.add_argument('--root',type=str,default='data/opera/clustered/greedy/divorced',help='Root for the training/testing/withheld files.')
 parser.add_argument('--outdir',type=str,default='greedy/',help='Root for the output files from running the script.')
 parser.add_argument('--loss',choices=['mse','evd','dist'],help='Loss function to use. Either Evidence, Gaussian distribtion, or MSE.')
+parser.add_argument('--testfile',default=None,help='Filename for the file containing the moleculess that the greedy selection is being fit towards. Defaults to not being set and dynamically figured out.')
 parser.add_argument('--test2',default=None,help='Filename for secondary test set to use with the training script.')
 parser.add_argument('--split',default='0', type=str, help='Split for the training/withheld/test files. Defaults to 0.')
 parser.add_argument('--fingerprint',default='morgan',choices=['rdkit','morgan','atompair','torsions','maccs'],help='Type of fingerprint to use. Defaults to morgan.')
@@ -39,7 +40,10 @@ withheld=[]
 for nmols in range(n_withheld):
     withheld.append(f'{args.root}_withheld{args.split}_mol{nmols}.csv')
 
-testfile=f'{args.root}_test{args.split}.csv'
+if args.testfile:
+    testfile=args.testfile
+else:
+    testfile=f'{args.root}_test{args.split}.csv'
 
 #checking if we need to update the withheld set.
 if not args.start==0:
