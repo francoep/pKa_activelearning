@@ -24,6 +24,7 @@
 \usepackage{xr-hyper}
 \usepackage{hyperref}
 \usepackage{multirow}
+\usepackage{amsmath}
 \usepackage{soul}
 \usepackage[flushleft]{threeparttable}
 \captionsetup[figure]{font=small,labelfont=small}
@@ -166,7 +167,9 @@ However, most of the research with these various active learning approaches focu
 Here we describe our dataset preparation, active learning selection criteria, and model architectures.
 
 \subsection{Dataset}
-We utilized the OPERA pKa dataset\cite{operapKa} as it was the largest easily available and labeled dataset for small molecule pKa. Before model training we first standardized the SMILES\cite{smiles} strings using RDkit\cite{rdkit} and removed any duplicates. Then we normalized the pKa's to 0 mean and unit variance. In order to create CCV folds, we utilized the MACCS keys \cite{maccskeys} representation and created clusters using a Tanimoto similarity threshold of 0.8. These clusters were then randomly split into the various datasets described in Table~\ref{tab:datasets}. For each split, there are 5 different generations each made with a different random seed. Additionally, a PCA visualization of the largest cluster and the secondary cluster we selected for improved coverage in later experiments is shown in Figure~\ref{fig:pcaclusters}.
+We utilized the OPERA pKa dataset\cite{operapKa} as it was the largest easily available and labeled dataset for small molecule pKa. Before model training we first standardized the SMILES\cite{smiles} strings using RDkit\cite{rdkit} and removed any duplicates. Then we normalized the pKa's to 0 mean and unit variance. In order to create CCV folds, we utilized the MACCS keys \cite{maccskeys} representation and created clusters using a Tanimoto similarity threshold of 0.8.
+
+Once the clusters are established we randomly added a cluster to either the Training, Withheld, or Testing set if the set was large enough to contain the entire cluster. This process was repeated with 5 different random seeds to create the ``CCV'' dataset. We then created the ``Largest Cluster'' dataset by randomly splitting the largest cluster into a Training, Withheld, and Testing set and storing the remaining clusters in the External set. Again, this process was repeated 5 times with different random seeds. This same procedure was performed with the largest and third largest clusters to create the ``Clusters 02'' dataset. Lastly, we also created the ``Largest Cluster Validation'' set by copying the corresponding fold of the ``Largest Cluster'' set's Training and Testing sets, and then then randomly selecting 50 molecules from the prior Withheld set to use as a new External set (leaving the remaining molecules as the Withheld set). This allows our models in Experiment 8 to be fit with respect to a subset of molecules within cluster (Test set) and evaluated on a different set of molecules also within cluster (new External set). The sizes of each dataset are described in Table~\ref{tab:datasets}. Additionally, a PCA visualization of the largest cluster and the secondary cluster we selected for improved coverage in later experiments is shown in Figure~\ref{fig:pcaclusters}.
 
 \begin{table}[]
     \centering
@@ -180,7 +183,7 @@ We utilized the OPERA pKa dataset\cite{operapKa} as it was the largest easily av
         Clusters 02 & 50 & 690 & 50 & 4731 \\
     \hline
     \end{tabular}
-    \caption{Various data splits used in our experiments. The ``Largest Cluster Validation'' dataset contains the same Training and Testing sets as ``Largest Cluster,'' but 50 randomly chosen molecules from the Withheld set are selected as the ``External set'' (called Validation later).}
+    \caption{Sizes of the various data splits used in our experiments. ``CCV'' contains all of the data available. The ``Largest Cluster'' Training, Withheld, and Testing is a random split of the largest cluster in the ``CCV'' set, with the remaining data being in the External set. The ``Largest Cluster Validation'' dataset contains the same Training and Testing (called Validation later) sets as ``Largest Cluster,'' but 50 randomly chosen molecules from the Withheld set are selected as a new ``External set'' (called Test set later). Lastly, the ``Clusters 02'' set contains random splits of the largest and third largest clusters of the ``CCV'' data to make its Train, Withheld, and Testing sets, with the remaining data composing the External set.}
     \label{tab:datasets}
 \end{table}
 
@@ -194,10 +197,43 @@ We utilized the OPERA pKa dataset\cite{operapKa} as it was the largest easily av
 \subsection{Active learning selection methods}
 The active learning loop is as follows: 1) Train a model from scratch using the available training data and log its performance on the test set, 2) Using the trained model, predict the labels of every molecule in the withheld set, 3) Select the molecule to be added to the training set via a selection criteria, 4) Repeat steps 1-3 until there are no molecules remaining in the withheld set. We investigated 3 strategies for selecting the molecule to add to the training set. In order of increasing complexity we have: 1) Highest variance between the predicted labels of a 5 model ensemble, 2) Highest predicted variance of a single model regressing to a Gaussian distribution, and 3) highest predicted evidence of a single model regressing to a NIG distribution as described by \citet{alnigregress}. We selected these three methods as they represent the naive approach, then a more sophisticated approach, and lastly a state of the art approach to active learning for regression tasks.
 
-For models using the variance of predictions of a 5 model ensemble, each model was trained on the mean-squared error (MSE) of the predicted labels and the true labels of the test set, and only differed between other members of the ensemble by having a different random seed for weight initialization. The loss function for the Gaussian regression models is the log-likelihood of the true label. Lastly, for the models regressing to a NIG distribution, we utilized the exact loss defined by \citet{alnigregress}, which is a linear combination of the negative log-likelihood of the true label being in the predicted distribution and the absolute error of the predicted and true labels. Lastly, in our later experiments we selected new molecules by the maximal absolute difference of the current predicted label and the previous iteration's predicted label of the molecules in the withheld set.
+For models using the variance of predictions of a 5 model ensemble, each model was trained on the mean-squared error (MSE) of the predicted labels and the true labels of the test set, and only differed between other members of the ensemble by having a different random seed for weight initialization. The loss function for the Gaussian regression models ($\mu$,$\sigma^2$) is the log-likelihood of the true label ($y$) as shown in Equation 1.
+\begin{equation}
+    LL = \log \frac{2\pi \sigma^2}{2} + \frac{(\mu - y)^2}{2\sigma^2}
+\end{equation}
+
+Lastly, for the models regressing to a NIG distribution ($\mu$,$\nu$,$\alpha$,$\beta$), we trained utilizing the loss defined by \citet{alnigregress}:  a linear combination of the negative log-likelihood of the true label ($y$) being in the predicted distribution and the absolute error of the predicted and true labels as shown in Equation 2. 
+
+\begin{equation}
+\begin{split}
+\lambda &= 1+\nu \\
+NLL &= 0.5\log\frac{\pi}{\nu} - \alpha\log(2\beta\lambda)  \\
+ & + (\alpha+0.5)\log(\nu(y-\mu)^2+2\beta\lambda)  \\
+ & + \log\Gamma(\alpha) - \log\Gamma(\alpha+0.5)  \\
+ERR &= |y-\mu| \times (2\nu + \alpha)  \\
+Loss &= NLL + 0.2(ERR)    
+\end{split}
+\end{equation}
+
+Lastly, in our later experiments we selected new molecules by the maximal absolute difference of the current predicted label and the previous iteration's predicted label of the molecules in the withheld set.
 
 \subsection{Model architecture}
-In order to determine the model architecture we performed a two-stage hyperparameter sweep with weights and biases\cite{wandb} as described in Table~\ref{tab:wandsweep}. Briefly, we selected for the best overall model for each of the two active learning selection methods described above, which turned out to be the same architecture for each loss. Each run of the sweep was performed on the train+validation of a single seed of the CCV data split. Our final architecture is shown in Figure(TODO make). The vast majority of our models were trained on the Morgan fingerprints of the molecule's SMILES with bitsize set to 2048, however we also investigated utilizing a richer input representation to the model. This was done by utilizing the generator of the pre-trained molecule attention transformer (MAT) \cite{MAT}, which is a graph transformer that was pre-trained on ChemBL\cite{Chembl} to predict the properties of masked nodes of the input graph. We utilized the 1024 dimensional vector output of the MAT model generator is a 1024 dimensional vector as input to our model during training.
+In order to determine the model architecture we performed a two-stage hyperparameter sweep with weights and biases\cite{wandb} as described in Table~\ref{tab:wandsweep}. Briefly, we selected for the best overall model for each of the two active learning selection methods described above, which turned out to be the same architecture for each loss. Each run of the sweep was performed on the train+validation of a single seed of the CCV data split. Our final architecture is shown in Figure~\ref{fig:architectures}. The vast majority of our models were trained on the Morgan fingerprints of the molecule's SMILES with bitsize set to 2048, however we also investigated utilizing a richer input representation to the model. This was done by utilizing the generator of the pre-trained molecule attention transformer (MAT) \cite{MAT}, which is a graph transformer that was pre-trained on ChemBL\cite{Chembl} to predict the properties of masked nodes of the input graph. We utilized the 1024 dimensional vector output of the MAT model generator is a 1024 dimensional vector as input to our model during training.
+
+\begin{figure}[tbph]
+    \centering
+    \begin{subfigure}[b]{0.48\textwidth}
+        \includegraphics[width=1\linewidth]{figures/general_architecture.pdf}
+        \caption{Overall Model Architecture}
+    \end{subfigure}%
+    \hfill
+    \begin{subfigure}[b]{0.48\textwidth}
+        \includegraphics[width=1\linewidth]{figures/MAT_encoder.PNG}
+        \caption{MAT generator architecture. Used as input for experiments 6 and 7 to replace the Embedding Block.}
+    \end{subfigure}
+    \caption{Model Architecture. The overall model architecture was utilized for every experiment (except experiment 8 where we went from 2 hidden layers to 9). The Embedding block consisted of generating the Morgan fingerprint with bitsize 2048 for the input molecule and passing into a linear layer to be reduced to size 1024, except for Experiments 6 and 7 where we utilized the MAT generator architecture to generate a 1024 dimension vector instead.}
+    \label{fig:architectures}
+\end{figure}
 
 \begin{figure}[tb]
     \subfloat[Initial Random Sweep]{
@@ -284,7 +320,7 @@ In order to test if this is the case, we then repeated the experimental setup bu
 \subsection{Experiment 3 -- Verifying if signal is present in this dataset.}
 The failure of the active learning methods to perform better than random molecule selection when we restricted all the data to one cluster suggests that there might not be signal present in the data. In order to test this, we need some baseline of maximal performance against which to compare. In order to calculate this baseline we exhaustively train a new model for every molecule in the withheld set during each step of the active learning loop. We then greedily select the molecule which resulted in the model that had the lowest RMSE on the test set. This greedy selection will have the best possible active learning ordering for whatever test set we are evaluating.
 
-Due to the immense computational burden (having to train $\frac{n(n+1)}{2}$ models where $N$ is the number of molecules in the withheld set), we only performed this analysis on one particular split of the ``Largest Cluster'' data. The results are shown in Figure~\ref{fig:lcgreed}. We show that for this fold there does exist an optimal ordering of withheld set molecules that results in a smaller subset of molecules that can acheive the same final performance as adding all of the withheld molecules to the training set. Interestingly, we also show that maximal model performance can be achieved by intentionally not adding all of the withheld molecules, which shows that there are molecules whose addition hurt final model performance. Additionally, models trained only on this cluster of data do not generalize to the out of cluster molecules, as shown by the poor performance on the ``Rest'' test set, which the models never see during training. Lastly, we point out that while it appears that the active learning methods may be successful in the Pearson's R evaluation on the within cluster test set (orange versus blue lines in Figure~\ref{fig:lcgreed}), this effect is an artifact of randomness and disappears with more random seeds as shown in Figure~\ref{fig:lcresults}, and that the supposed success is not reflected in the RMSE evaluation.
+Due to the immense computational burden (having to train $O(N^2)$ models where $N$ is the number of molecules in the withheld set), we only performed this analysis on one particular split of the ``Largest Cluster'' data. The results are shown in Figure~\ref{fig:lcgreed}. We show that for this fold there does exist an optimal ordering of withheld set molecules that results in a smaller subset of molecules that can acheive the same final performance as adding all of the withheld molecules to the training set. Interestingly, we also show that maximal model performance can be achieved by intentionally not adding all of the withheld molecules, which shows that there are molecules whose addition hurt final model performance. Additionally, models trained only on this cluster of data do not generalize to the out of cluster molecules, as shown by the poor performance on the ``Rest'' test set, which the models never see during training. Lastly, we point out that while it appears that the active learning methods may be successful in the Pearson's R evaluation on the within cluster test set (orange versus blue lines in Figure~\ref{fig:lcgreed}), this effect is an artifact of randomness and disappears with more random seeds as shown in Figure~\ref{fig:lcresults}, and that the supposed success is not reflected in the RMSE evaluation.
 
 \begin{figure}[tbph]
     \centering
@@ -303,7 +339,7 @@ Due to the immense computational burden (having to train $\frac{n(n+1)}{2}$ mode
 
 \subsection{Experiment 4 -- Checking if greedy selection works when data is entirely within cluster.}
 
-In Experiment 3 we show that performing a Greedy selection with respect to a singular cluster fails to generalize to the other clusters in the dataset. This is unsurprising, as by construction the Greedy selection is overfit to the dataset that is selected for. Thus, it remains to be shown if fitting to a validation set within a cluster would achieve good results on the test set of said cluster. In order to answer this question we created the ``Largest Cluster Validation'' set (Table~\ref{tab:datasets}), which consists of the same Training and Testing sets utilized in Experiment 3, but we randomly selected 50 molecules from the Withheld set to serve as our External/Validation set for the Greedy selection algorithm. As in Experiment 3, we trained 1 model with 1 random seed for each of the model types. The results of this experiment are shown in Figure~\ref{fig:lcgreedvalid}. As before we show that an optimal ordering of molecules is identified with the Greedy selection algorithm with respect to performance on the Validation set. However, this ordering of additional molecules has similar performance to the active learning methods and selecting molecules at random for the Test set. Thus, the Greedy selection algorithm is only useful to provide an upperbound on active learning's performance relative to a particular set of data and does not transfer to other datasets even if they are from the same data cluster.
+In Experiment 3 we show that performing a Greedy selection with respect to a singular cluster fails to generalize to the other clusters in the dataset. This is unsurprising, as by construction the Greedy selection is overfit to the dataset that is selected for. Thus, it remains to be shown if fitting to a validation set within a cluster would achieve good results on the test set of said cluster. In order to answer this question we created the ``Largest Cluster Validation'' set (Table~\ref{tab:datasets}), which consists of the same Training and Testing sets utilized in Experiment 3, but we randomly selected 50 molecules from the Withheld set to serve as our Test/Validation set for the Greedy selection algorithm. As in Experiment 3, we trained 1 model with 1 random seed for each of the model types. The results of this experiment are shown in Figure~\ref{fig:lcgreedvalid}. As before we show that an optimal ordering of molecules is identified with the Greedy selection algorithm with respect to performance on the Validation set. However, this ordering of additional molecules has similar performance to the active learning methods and selecting molecules at random for the remaining unseen within cluster molecules in the ``External/Test'' set. Thus, the Greedy selection algorithm is only useful to provide an upperbound on active learning's performance relative to a particular set of data and does not transfer to other datasets even if they are from the same data cluster.
 
 \begin{figure}[tbph]
     \centering
@@ -344,7 +380,7 @@ After showing that an optimal ordering is possible but the active learning appro
 
 As everything we have tried thus far has failed, we hypothesized that utilizing the Morgan fingerprints as input to our model are not expressive enough for the active learning methods to perform well. Thus we sought to provide a more feature rich input to our model. We selected the pre-trained weights of the MAT\cite{MAT} model as our input representation as the authors were successful in using them on other molecular property prediction tasks, and the pre-training procedure they employed of having the model predict the atom properties of masked nodes would imbue their network with some knowledge of chemistry. Thus, we hypothesize that by taking the output of the generator portion of MAT as the input to our model, we could provide a more feature rich input which could boost model performance.
 
-The results of this experiment are shown in Figure~\ref{fig:MATinput}. We also varied our training times by 2 orders of magnitude since our initial sweep which set the model architecture did not utilize this new input in its hyperparameter selection and we do not know how long the model would need to train. We also evaluated every active learning selection criteria with this new input. In general, the models trained for only 4 epochs did not learn, the models trained for 40 epochs started to learn, and the models trained for 400 epochs were noisy learners. In terms of RMSE, no active learning method outperformed selecting molecules at random. However, for Pearson's R there is some potential signal in the longer training for the Gaussian and NIG regression models, since there is no difference in the RMSE performance for the same models this is likely misleading. Again, we also observe the failure of these models to generalize outside of the two clusters that they were trained on.
+The results of this experiment are shown in Figure~\ref{fig:MATinput}. We also varied our training times by 2 orders of magnitude since our initial sweep which set the model architecture did not utilize this new input in its hyperparameter selection and we do not know how long the model would need to train. We also evaluated every active learning selection criteria with this new input. In general, the models trained for only 4 epochs did not learn, the models trained for 40 epochs started to learn, and the models trained for 400 epochs had high variance in their performance as molecules were added. In terms of RMSE, no active learning method outperformed selecting molecules at random. However, for Pearson's R in Figure~\ref{fig:MATinput}A there is some potential signal in the 400 epoch training for the Gaussian and NIG regression models, as there is a separation between the two lines. However, since there is no difference in the RMSE performance for the same models this is likely misleading and an artifact of the single seed we utilized for this experiment. This is reinforced by us also observing the failure of these models to generalize outside of the two clusters that they were trained on.
 
 \begin{figure}[tbph]
     \centering
@@ -392,7 +428,7 @@ In experiment 6 the 4 epoch trained NIG regression models show strange behavior 
 
 \subsection{Experiment 8 -- Using a much larger model}
 
-Given the failures of Experiments 1 through 7 at generalization, and that larger models tend to generalize better \cite{bigmodelgeneralize}, we elected to take our earlier Morgan fingerprint based method and dramatically increase the number of layers in the model. The maximum number of hidden layers in our hyperparameter sweep was 4 (Figure~\ref{tab:archsweep}), so we evaluated the same general model architecture as our deployed model but used 9 hidden layers instead. For this experiment we trained one seed on the ``Largest Cluster 02'' data split, and since this model is larger we also trained for 4, 40, or 400 epochs for each active learning selection method. The results of this experiment are shown in Figure~\ref{fig:bigmodel}. We find that there is minimal difference between picking molecules at random and using an active learning approach and that the much larger model's final performance on the withheld clusters is similar to the results we found in Experiment 5 (Figure\ref{fig:lc02greed}). Thus, more than doubling the number of hidden layers in the model was insufficient to rescue the poor results we have observed.
+Given the failures of Experiments 1 through 7 at generalization, and that larger models tend to generalize better \cite{bigmodelgeneralize}, we elected to take our earlier Morgan fingerprint based method and dramatically increase the number of layers in the model. The maximum number of hidden layers in our hyperparameter sweep was 4 (Figure~\ref{tab:archsweep}), so we evaluated the same general model architecture as our deployed model but used 9 hidden layers instead. For this experiment we trained one seed on the ``Largest Cluster 02'' data split, and since this model is larger we also trained for 4, 40, or 400 epochs for each active learning selection method. The results of this experiment are shown in Figure~\ref{fig:bigmodel}. We find that there is minimal difference between picking molecules at random and using an active learning approach and that the much larger model's final performance on the withheld clusters is similar to the results we found in Experiment 5 (Table\ref{tab:NIGcompare}). The smaller model used in Experiment 5 only had 2 hidden layers, as compared to the model used here having 9. Thus, more than doubling the number of hidden layers in the model was insufficient to rescue the poor results we have observed.
 
 \begin{figure}[tbph]
     \centering
@@ -415,9 +451,26 @@ Given the failures of Experiments 1 through 7 at generalization, and that larger
         \includegraphics[width=1\linewidth]{figures/fig8_morgan_fp_bigmodel_rest_RMSE.pdf}
         \caption{RMSE on the External Clusters}
     \end{subfigure}
-    \caption{Our eighth experiment testing the effect of using a much larger fingerprint model on the Clusters 02 dataset. In this experiment we only ran 1 seed on 1 fold of the data, but utilized every active learning approach and trained for 4, 40, or 400 epochs. In each subgraph, a row contains an active learning approach, and the columns are the number of epochs the model trains. Again we find that the differing active learning approaches do not outperform picking molecules at random, and the final model performance is generally unaffected.}
+    \caption{Our eighth experiment testing the effect of using a much larger fingerprint model on the Clusters 02 dataset. In this experiment we only ran 1 seed on 1 fold of the data, but utilized every active learning approach and trained for 4, 40, or 400 epochs. In each subgraph, a row contains an active learning approach, and the columns are the number of epochs the model trains. Again we find that the differing active learning approaches do not outperform picking molecules at random. Notably, these larger models achieve similar final performance to the smaller model used in Experiment 5 (Table\ref{tab:NIGcompare})}
     \label{fig:bigmodel}
 \end{figure}
+
+\begin{table}[]
+    \centering
+    \begin{tabular}{c|c|c|c|c|c}
+    \hline
+        &  & \multicolumn{2}{c|}{Within Cluster Test} & \multicolumn{2}{c}{External Clusters Test} \\
+        Experiment & Training Epochs & RMSE & R & RMSE & R \\
+    \hline
+        5 & 4 & 0.470 & 0.860 & 0.905 & 0.419 \\
+        8 & 4 & 0.514 & 0.844 & 0.946 & 0.365 \\
+        8 & 40 & 0.470 & 0.860 & 0.923 & 0.386 \\
+        8 & 400 & 0.577 & 0.804 & 1.018 & 0.342 \\
+    \hline
+    \end{tabular}
+    \caption{Comparing the final model results between Experiment 5 and Experiment 8. All models were trained utilizing NIG regression. The model in Experiment 5 utilized 2 hidden layers, whereas the model used in Experiment 8 used 9 hidden layers. The models utilized in Experiment 8 have similar performance to the one utilized in Experiment 5 on the within cluster test set, and worse performance on the excluded cluster test set.}
+    \label{tab:NIGcompare}
+\end{table}
 
 \subsection{Experiment 9 -- Implementing a new active learning selection criteria.}
 
