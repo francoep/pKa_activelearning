@@ -6,7 +6,18 @@ This repository contains the data utilized for the paper, instructions on how to
 We utilized the pKa dataset from  [OPERA](https://github.com/kmansouri/OPERA), and the pKa datasets from the czodrowskilab's [Machine-Learning-Meets-pKa](https://github.com/czodrowskilab/Machine-learning-meets-pKa).
 
 ## Citation
-If you find this work helpful, please cite our paper. The bibtex formatted citation is provided below. (insert bibtex citation)
+If you find this work helpful, please cite our preprint. The bibtex formatted citation is provided below. 
+```
+ @article{francoeur_penaherrera_koes_2022, 
+        place={Cambridge}, 
+        title={Active Learning for Small Molecule pKa Regression; a Long Way To Go}, 
+        DOI={10.26434/chemrxiv-2022-8w1q0}, 
+        journal={ChemRxiv}, 
+        publisher={Cambridge Open Engage}, 
+        author={Francoeur, Paul and Penaherrera, Daniel and Koes, David}, 
+        year={2022}
+}
+```
 
 ## Requirements
   - Python 3.8
